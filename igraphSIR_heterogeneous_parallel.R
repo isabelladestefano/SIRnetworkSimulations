@@ -7,82 +7,151 @@ library(doParallel)
 
 # parameters for desease
 probs =  seq(0.005,0.025,0.005)
-
-
+m=c(10,25,50) #number of edges added at each timestep
 
 #parameters
-
 params = expand.grid(m = m, probs = probs) 
-
-
 
 
 apply(params, MARGIN = 1, FUN= function(params){
   
   registerDoParallel()
-  #fixed_params
-  m=c(10,25,50) #number of edges added at each timestep
+  
+  # parameters for simulations----
   m0=5 #number of vertecies at timestep 0
   N = 1000 #number of verticies in the graph
-  t_contageous = 15
-  path = "simulations/10/"
-  B=1000
+  
+  t_contageous = 15 # time contageous
+  
+  params = expand.grid(m = m, probs = probs) 
+  
   #define function
-  runBASim = function(N,m0, m, p_transmit, t_contageous, simnum, path){
+  # simulation function ----
+  runSIRsimBAnetwrok = function(N,m0, m, p_transmit, t_contageous, simnum, path){
+    
     #make network using BA algorithm
-    start_graph = make_empty_graph(n = m0,directed = F)
-    network = sample_pa(n = N, m=m, start.graph = start_graph , directed = F)
-    deg = degree(network) # degrees of the verticies
+    start_graph = make_empty_graph(n = m0,directed = F) #algorithm begins with an empty graph with m0 nodes
+    network = sample_pa(n = N, m=m, start.graph = start_graph , directed = F) #igraph builed prefferential attatchment using barbassi-albert model
     
-    init_infected = sample(which(deg == round(mean(deg))),1) # pick initial infected to have mean number of connected edges
+    deg = degree(network) # degrees of the verticies in network
     
-    network = set.vertex.attribute(network, name = "status",value = "susceptable")
-    network = set.vertex.attribute(network, name = "status", index =  init_infected, value = "infected")
-    network = set.vertex.attribute(network, name = "time_infected", value = 0)
+    #calculate theoretical degree mean from pareto distribution
+    xm = m*sqrt((N-m0)/N) 
+    alpha = 2
+    theo_mu = round(xm^alpha*alpha/ xm^(alpha-1)) #theoretical mean of the degree distribution 
     
-    network = set.edge.attribute(network, name = "transmission", value = 0)
     
-    t=0
+    init_infected = sample(which(abs(deg-theo_mu)==min(abs(deg-theo_mu))),1) #pick initial infected to have degree equal to theoretical mean degree
+    init_degree = deg[init_infected]
     
-    which_infected = which(vertex.attributes(network)$status == "infected")
-    start =Sys.time()
+    
+    #set up atrributes for network 
+    network = set.vertex.attribute(network, name = "status",value = "susceptable") #SIR status
+    network = set.vertex.attribute(network, name = "time_infected", value = 0) #time infected with desease once status = "infected"
+    network = set.edge.attribute(network, name = "transmission", value = 0) #this tracks along which edge a new infection is transmitted at any given time point
+    network = set.vertex.attribute(network, name = "status", index =  init_infected, value = "infected") #SIR status for initial infected
+    
+    t=0 #start desease clock
+    
+    
+    #start timing simulation for logging purposes
+    start =Sys.time() 
     print(paste0("start: ", start))
-    while(
-      length(which_infected) > 0 & length(which_infected)<N){
-      
-      which_infected = which(vertex.attributes(network)$status == "infected")
+    
+    
+    which_infected = which(vertex.attributes(network)$status == "infected") #get vertex idecies of initially infected individuals
+    all_SIR_counts <- data.frame(infects = c(), 
+                                 susceptable = c(),
+                                 recovered = c(),
+                                 simnum = c(),
+                                 ID = c() )
+    #continue time stepping until either no-one or everyone is infected
+    
+    num_infected = length(which_infected)
+    while(num_infected > 0 & num_infected<N  ){
+      which_infected = which(vertex.attributes(network)$status == "infected") #get vertex idecies of infected individuals
       t=t+1
       
-      network = set.vertex.attribute(network, name = "time_infected", index = which_infected, value = vertex.attributes(network, which_infected)$time_infected+1)
-      network = set.edge.attribute(network, name = "transmission", value = 0)
       
+      network = set.edge.attribute(network, name = "transmission", value = 0) #reset transmission over edges for this time step
+      
+      #for every infected individual
       sapply(1:length(which_infected), function(i){
         which_infect = which_infected[i]
-        possible_infect= adjacent_vertices(network,which_infect)[[1]]
-        new_infect = possible_infect[1==rbinom(length(possible_infect),1,p_transmit)]
-        if(length(new_infect)>0){
+        possible_infect= adjacent_vertices(network,which_infect)[[1]] #find immediate neightbors
+        new_infect = possible_infect[1==rbinom(length(possible_infect),1,p_transmit)] #independently for each neighbor a bernouli draw decides whether the infection spreads across a particular edge
+        if(length(new_infect)>0){ #forthe new infections caused by the individual which_infect
           edges <- c()
-          sapply(new_infect, function(x){edges <<- c(edges, which_infect, x)})
-          network <<- set.edge.attribute(network, name = 'transmission', index =edges, value = 1)
-          network <<- set.vertex.attribute(network, name = 'status', index = new_infect, value = 'infected')
+          sapply(new_infect, function(x){edges <<- c(edges, which_infect, x)}) #get the edges along which desease was transmitted
+          network <<- set.edge.attribute(network, name = 'transmission', index =edges, value = 1) #update edge transmission for this time-step
+          network <<- set.vertex.attribute(network, name = 'status', index = new_infect, value = 'infected') #change SIR status of newly infected individuals
         }
       })
       
+      network = set.vertex.attribute(network, name = "time_infected", index = which_infected, value = vertex.attributes(network, which_infected)$time_infected+1) #increment time infected
       
-      new_recover = V(network)[vertex.attributes(network)$time_infected > t_contageous]
-      network = set.vertex.attribute(network, name = 'status', index = new_recover, value = 'recovered')
+      new_recover = V(network)[vertex.attributes(network)$time_infected > t_contageous] #which vertecies are infected longer than time_contageous (recovered)
+      network = set.vertex.attribute(network, name = 'status', index = new_recover, value = 'recovered') #update status of recovered individuals 
+      
+      #summarise and formate network counts to save for results
+      SIR_counts  = data.frame(status = vertex.attributes(network)$status)   %>%
+        group_by(status)%>%
+        summarise(N=n())   %>%
+        spread(status,N) %>%
+        mutate(t= t)
+      
+      if(!"infected" %in% names(SIR_counts)){
+        SIR_counts$infected <- 0
+      } 
+      if(!"susceptable" %in% names(SIR_counts)){
+        SIR_counts$susceptable <- 0
+      } 
+      if(!"recovered" %in% names(SIR_counts)){
+        SIR_counts$recovered <- 0
+      } 
       
       
-      save(network, file = paste0(path,"duration",t,"_N",N,"_m0",m0,"_m",m,"_p", p_transmit, "_t", t_contageous, "_",simnum,".Rdata"))
+      #add timestep counts to simulations counts
+      
+      SIR_counts$simnum = simnum
+      SIR_counts$ID = paste("p",p_transmit, "_m",m)
+      all_SIR_counts = bind_rows(all_SIR_counts, SIR_counts)
+      num_infected = SIR_counts$infected[1]  
+      
+      #save(network, file = paste0(path,"duration",t,"_N",N,"_m0",m0,"_m",m,"_p", p_transmit, "_t", t_contageous, "_",simnum,".Rdata"))
+      print(num_infected)
     }
+    
+    
+    
+    
     print(paste0("end: ", Sys.time() - start))
     
+    #save parameters in different file for theoretical comparison using SIR dynamical system
+    parameters = data.frame(
+      init_degree = init_degree,
+      N = N, 
+      m0 = m0,
+      m = m,
+      p_transmit = p_transmit,
+      t_contageous = t_contageous,
+      simnum = simnum,
+      ID = paste("p",p_transmit, "_m",m)
+    )
+    
+    
+    write.csv(all_SIR_counts, file = paste0(path,"population_counts/",simnum,"_p",p_transmit*10^3,"E-3_m",m, ".csv"))
+    write.csv(all_SIR_counts, file = paste0(path,"parameters/",simnum,"_p",p_transmit*10^3,"E-3_m",m, ".csv"))
   }
-
+  
+  # run 1000 simulations for each parameter combination ----
+  path = "simulations/heterogenous/"
+  B=1000
+  
   foreach(x=1:B, .packages = c('tidyverse','igraph'), .verbose = T)%dopar%
-      runBASim(N=N,m0=m0, m =params[1], p_transmit = params[2], t_contageous = t_contageous, x, path)
+    runSIRsimBAnetwrok(N=N,m0=m0, m =params[1], p_transmit = params[2], t_contageous = t_contageous, x, path)
 })
 
 
-runBASim(N=N,m0=m0, m =m[1], p_transmit = probs[2], t_contageous = t_contageous, 1, path)
+
 
