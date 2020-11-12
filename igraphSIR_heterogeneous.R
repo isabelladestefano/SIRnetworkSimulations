@@ -3,13 +3,12 @@ library(tidyverse)
 
 
 # parameters for simulations----
-m=c(10,25,50) #number of edges added at each timestep
+m=c(50,100, 150) #number of edges added at each timestep
 m0=5 #number of vertecies at timestep 0
-N = 1000 #number of verticies in the graph
+N = 5000 #number of verticies in the graph
 
-probs =  seq(0.005,0.025,0.005) #probability of transmission along an edge
-t_contageous = 15 # time contageous
-
+probs =  seq(0.001,.005,0.001) #probability of transmission along an edge
+t_contageous = 20 # time contageous
 params = expand.grid(m = m, probs = probs) 
 
 
@@ -129,19 +128,22 @@ runSIRsimBAnetwrok = function(N,m0, m, p_transmit, t_contageous, simnum, path){
   )
   
   
-  write.csv(all_SIR_counts, file = paste0(path,"population_counts/",simnum,"_p",p_transmit*10^3,"E-3_m",m, ".csv"))
-  write.csv(all_SIR_counts, file = paste0(path,"parameters/",simnum,"_p",p_transmit*10^3,"E-3_m",m, ".csv"))
+  write.csv(all_SIR_counts, file = paste0(path,"population_counts/",simnum,"_p",p_transmit*10^3,"E-3_m",m, "_N",N,".csv"))
+  write.csv(all_SIR_counts, file = paste0(path,"parameters/",simnum,"_p",p_transmit*10^3,"E-3_m",m,"_N",N, ".csv"))
 }
 
 
 
 # run 1000 simulations for each parameter combination ----
-path = "simulations/heterogenous/"
-B=1000
+path = "simulations/heterogeneous/"
+#B=1000
 
 apply(params, MARGIN = 1, FUN= function(params){
-  sapply(1:B,
+  sapply(1:100,
          FUN = function(x){
            runSIRsimBAnetwrok(N=N,m0=m0, m =params[1], p_transmit = params[2], t_contageous = t_contageous, x, path)
          })
 })
+
+runSIRsimBAnetwrok(N=N,m0=m0, m =50, p_transmit = 0.005, t_contageous = t_contageous, 1, path)
+
